@@ -11,8 +11,6 @@
 //   - Memory safety: no buffer overflows, no UB (unlike C)
 //   - Same performance as C with compile-time guarantees
 
-use std::net::Ipv4Addr;
-
 // ============================================================================
 // Packet buffer - fixed-size, stack allocated
 // ============================================================================
