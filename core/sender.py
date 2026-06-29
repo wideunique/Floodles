@@ -207,7 +207,7 @@ class FloodEngine:
 
     def wait(self) -> None:
         for t in self._workers:
-            t.join(timeout=2)
+            t.join()
 
     def is_running(self) -> bool:
         return not self._stop_event.is_set()

