@@ -11,6 +11,8 @@
 //   - Memory safety: no buffer overflows, no UB (unlike C)
 //   - Same performance as C with compile-time guarantees
 
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+
 // ============================================================================
 // Packet buffer - fixed-size, stack allocated
 // ============================================================================
@@ -77,6 +79,25 @@ fn rand_ip() -> u32 {
 
 fn rand_port() -> u16 {
     1024 + (fast_rand() % 64511) as u16
+}
+
+fn resolve_source_ip(dst_ip: u32, dst_port: u16) -> Option<u32> {
+    let sock = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    let port = if dst_port == 0 { 9 } else { dst_port };
+    sock.connect((Ipv4Addr::from(dst_ip), port)).ok()?;
+
+    match sock.local_addr().ok()? {
+        SocketAddr::V4(addr) => Some(u32::from(*addr.ip())),
+        SocketAddr::V6(_) => None,
+    }
+}
+
+fn packet_source_ip(dst_ip: u32, dst_port: u16, spoof: bool) -> u32 {
+    if spoof {
+        rand_ip()
+    } else {
+        resolve_source_ip(dst_ip, dst_port).unwrap_or(0)
+    }
 }
 
 // ============================================================================
@@ -146,7 +167,7 @@ fn build_tcp_packet(dst_ip: u32, dst_port: u16, flags: u8, spoof: bool) -> Packe
     let tcp_len: usize = 20;
     let total = (ip_len + tcp_len) as u16;
 
-    let src_ip = if spoof { rand_ip() } else { 0u32 };
+    let src_ip = packet_source_ip(dst_ip, dst_port, spoof);
     let src_port = rand_port();
     let seq  = rand_u32();
     let ack  = rand_u32();
@@ -180,7 +201,7 @@ fn build_udp_packet(dst_ip: u32, dst_port: u16, payload_size: usize, spoof: bool
     let udp_len: usize = 8 + payload_size;
     let total = (ip_len + udp_len) as u16;
 
-    let src_ip   = if spoof { rand_ip() } else { 0u32 };
+    let src_ip   = packet_source_ip(dst_ip, dst_port, spoof);
     let src_port = rand_port();
 
     // UDP header
@@ -206,7 +227,7 @@ fn build_icmp_packet(dst_ip: u32, payload_size: usize, spoof: bool) -> PacketBuf
     let icmp_len: usize = 8 + payload_size;
     let total = (ip_len + icmp_len) as u16;
 
-    let src_ip = if spoof { rand_ip() } else { 0u32 };
+    let src_ip = packet_source_ip(dst_ip, 0, spoof);
 
     // ICMP header
     pkt.data[ip_len]     = 8;  // type: echo request

